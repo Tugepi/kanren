@@ -198,6 +198,7 @@ def run(
     n: Union[None, int],
     x: Any,
     *goals: GoalType,
+
     results_filter: Optional[Callable[[Iterator[Any]], Any]] = None
 ) -> Union[Tuple[Any, ...], Iterator[Any]]:
     """Run a logic program and obtain `n` solutions that satisfy the given goals.
@@ -243,6 +244,10 @@ def run_foreign(
     n: Union[None, int],
     x: Any,
     *goals: GoalType,
+
+    foreign_preds=(),   
+    #add the foreign pred as argument
+
     results_filter: Optional[Callable[[Iterator[Any]], Any]] = None
 ) -> Union[Tuple[Any, ...], Iterator[Any]]:
     
@@ -252,12 +257,20 @@ def run_foreign(
     if results_filter is not None:
         results = results_filter(results)
 
+    results = apply_foreign(foreign_preds)  #apply foreign preds filter
+
     if n is None:
         return results
     elif n == 0:
         return tuple(results)
     else:
         return tuple(take(n, results))
+    
+def apply_foreign(rs):
+    for r in rs:
+        if all(pred(r) for pred in rs):
+            yield r
+
 
 def dbgo(*args: Any, msg: Optional[Any] = None) -> GoalType:  # pragma: no cover
     """Construct a goal that sets a debug trace and prints reified arguments."""
