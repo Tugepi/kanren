@@ -239,6 +239,50 @@ def run(
     else:
         return tuple(take(n, results))
 
+def run_foreign(
+    n: Union[None, int],
+    x: Any,
+    *goals: GoalType,
+    results_filter: Optional[Callable[[Iterator[Any]], Any]] = None
+) -> Union[Tuple[Any, ...], Iterator[Any]]:
+    """Run a logic program and obtain `n` solutions that satisfy the given goals.
+
+    >>> from kanren import run, var, eq
+    >>> x = var()
+    >>> run(1, x, eq(x, 1))
+    (1,)
+
+    Parameters
+    ----------
+    n
+        The number of desired solutions. ``n=0`` returns a tuple with all
+        results and ``n=None`` returns a lazy sequence of all results.
+    x
+        The form to reify and return.  Usually contains logic variables used in
+        the given goals.
+    goals
+        A sequence of goals that must be true in logical conjunction
+        (i.e. `lall`).
+    results_filter
+        A function to apply to the results stream (e.g. a `unique` filter).
+
+    Returns
+    -------
+    Either an iterable or tuple of reified `x` values that satisfy the goals.
+
+    """
+    g = lall(*goals)
+    results = map(partial(reify, x), g({}))
+
+    if results_filter is not None:
+        results = results_filter(results)
+
+    if n is None:
+        return results
+    elif n == 0:
+        return tuple(results)
+    else:
+        return tuple(take(n, results))
 
 def dbgo(*args: Any, msg: Optional[Any] = None) -> GoalType:  # pragma: no cover
     """Construct a goal that sets a debug trace and prints reified arguments."""
