@@ -26,6 +26,9 @@ StateStreamType = Iterator[StateType]
 GoalType = Callable[[StateType], StateStreamType]
 
 
+from typing import Callable, Iterator, TypeVar
+#Helper für Transformation von Prädikat für den results_filter
+
 def fail(s: StateType) -> Iterator[StateType]:
     return iter(())
 
@@ -249,17 +252,18 @@ def run_foreign(
 #Edit#################################################################
     foreign_preds: Iterable[Callable[[Any], bool]] = (),  
     #add the foreign pred as argument
+    #Harte Bool-Checks
 ######################################################################
 
     results_filter: Optional[Callable[[Iterator[Any]], Any]] = None
 ) -> Union[Tuple[Any, ...], Iterator[Any]]:
     
-    g = lall(*goals)
+    g = lall(*goals)   
     results = map(partial(reify, x), g({}))
 
-    #Goal : State -> Iterator[State]
+    # g: Goal = State -> StateStream
     # g({}) : Iterator[State]
-    # partial(reify, x) : Callable[[State], Any]
+    # partial(reify, x): State -> Any
     # results : Iterator[Any]   # konkret: map-Objekt
 
 ######################################################################
@@ -270,6 +274,8 @@ def run_foreign(
 ######################################################################
 
     if results_filter is not None:
+        # Achtung: erlaubt „Any“ als Rückgabe (auch Liste/Tuple). Lazy bleibt nur,
+        # wenn der Filter selbst Iterator/Iterable liefert (nicht list(...)).
         results = results_filter(results)
 
     if n is None:
@@ -286,7 +292,17 @@ def apply_foreign(results: Iterator[Any], preds: Iterable[Callable[[Any], bool]]
         if all(p(r) for p in preds):
             yield r
 ######################################################################
+#Wandelt Prädikat um in results_filter################################
+T = TypeVar("T")
 
+def pred_to_results_filter(pred: Callable[[T], bool]) -> Callable[[Iterator[T]], Iterator[T]]:
+    def rf(it: Iterator[T]) -> Iterator[T]:
+        for v in it:
+            if pred(v):      # True -> durchlassen
+                yield v
+    return rf
+
+######################################################################
 def dbgo(*args: Any, msg: Optional[Any] = None) -> GoalType:  # pragma: no cover
     """Construct a goal that sets a debug trace and prints reified arguments."""
     from pprint import pprint
