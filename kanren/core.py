@@ -301,6 +301,8 @@ def pred_to_results_filter(pred: Callable[[T], bool]) -> Callable[[Iterator[T]],
             if pred(v):      # True -> durchlassen
                 yield v
     return rf
+#nur für ein prädikat
+
 
 ######################################################################
 def dbgo(*args: Any, msg: Optional[Any] = None) -> GoalType:  # pragma: no cover
