@@ -252,7 +252,7 @@ def run_foreign(
 ######################################################################
 #Edit#################################################################
     foreign_preds: Iterable[Callable[[Any], bool]] = (),  
-    #add the foreign pred as argument
+    #Python-Prädikat
     #Harte Bool-Checks
 ######################################################################
 
@@ -358,44 +358,10 @@ def run_foreign2(n, x, *goals, foreign_preds=(), results_filter=None,
     
     """
     Hebt eine normale Python-Bool-Funktion 'py_fn' zu einem *Goal* an.
-
-    Ablauf pro State S:
-    1) Reifiziere den interessierenden Term: val = reify(term, S)
-    2) Prüfe Groundness gemäß 'mode_positions':
-       - Nicht genug gebunden?
-         * "permissive": State *durchlassen* (yield S), erst später prüfen
-         * "strict":     State *verwerfen* (kein yield) → Guard/Pruning
-    3) Genug gebunden → py_fn(val) ausführen:
-         True  → State behalten (yield S)
-         False/Exception → State verwerfen
-
-    Parameter
     ---------
     py_fn : Callable[[Any], bool]
         Reines Python-Prädikat, das auf dem *reifizierten* Term arbeitet.
         Muss True/False liefern (Exceptions werden wie False behandelt).
-
-    term : Any
-        Der logische Term, auf den py_fn angewendet werden soll (z. B. x, (a,b), ...).
-
-    mode_positions : None | Sequence[int]
-        **Semantik der Groundness-Anforderung:**
-        - None  → das *gesamte* 'term' muss ground sein, bevor py_fn geprüft wird.
-        - (i,…) → nur die angegebenen *Tupel-Positionen* von 'term' müssen ground sein.
-                  Andere Positionen dürfen noch Variablen enthalten. Das erlaubt,
-                  Prädikate früh einzusetzen, ohne unnötig zu blockieren.
-        Typische Wahl:
-          * einstelliges Prädikat: None
-          * binär/ternär: (0,1) bzw. (0,1,2) o. ä.
-
-    policy : {"permissive", "strict"}
-        **Evaluations-Policy bei *nicht* erfüllter Groundness:**
-        - "permissive" (Standard): State *durchlassen* (kein Pruning jetzt),
-          weil zu früh zu prüfen falsche Negativen erzeugen könnte.
-          → *Vollständigkeit bleibt garantiert*.
-        - "strict": State *sofort verwerfen* (Guard). Das kann schneller sein,
-          ist aber potentiell *inkomplett*, wenn die Reihenfolge/Heuristik
-          nicht sicherstellt, dass die benötigten Variablen vorher gebunden werden.
     """
 
     fgoals = tuple(_foreign_goal(p, x, mode_positions=mode_positions, policy=policy)
