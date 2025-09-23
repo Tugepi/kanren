@@ -245,8 +245,11 @@ def run_foreign(
     x: Any,
     *goals: GoalType,
 
-    foreign_preds=(),   
+######################################################################
+#Edit#################################################################
+    foreign_preds: Iterable[Callable[[Any], bool]] = (),  
     #add the foreign pred as argument
+######################################################################
 
     results_filter: Optional[Callable[[Iterator[Any]], Any]] = None
 ) -> Union[Tuple[Any, ...], Iterator[Any]]:
@@ -254,10 +257,15 @@ def run_foreign(
     g = lall(*goals)
     results = map(partial(reify, x), g({}))
 
+######################################################################
+#Edit#################################################################
+#result ist ein lazy iterator - ein python map object
+    results = apply_foreign(results, foreign_preds)  
+    #apply foreign preds filter
+######################################################################
+
     if results_filter is not None:
         results = results_filter(results)
-
-    results = apply_foreign(foreign_preds)  #apply foreign preds filter
 
     if n is None:
         return results
@@ -265,12 +273,14 @@ def run_foreign(
         return tuple(results)
     else:
         return tuple(take(n, results))
-    
-def apply_foreign(rs):
-    for r in rs:
-        if all(pred(r) for pred in rs):
-            yield r
 
+######################################################################
+def apply_foreign(results: Iterator[Any], preds: Iterable[Callable[[Any], bool]]) -> Iterator[Any]:
+    preds = tuple(preds or ())
+    for r in results:
+        if all(p(r) for p in preds):
+            yield r
+######################################################################
 
 def dbgo(*args: Any, msg: Optional[Any] = None) -> GoalType:  # pragma: no cover
     """Construct a goal that sets a debug trace and prints reified arguments."""
