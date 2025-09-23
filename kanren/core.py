@@ -257,6 +257,11 @@ def run_foreign(
     g = lall(*goals)
     results = map(partial(reify, x), g({}))
 
+    #Goal : State -> Iterator[State]
+    # g({}) : Iterator[State]
+    # partial(reify, x) : Callable[[State], Any]
+    # results : Iterator[Any]   # konkret: map-Objekt
+
 ######################################################################
 #Edit#################################################################
 #result ist ein lazy iterator - ein python map object
