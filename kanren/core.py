@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+from collections.abc import Mapping, Iterable
 from functools import partial, reduce
 from itertools import tee
 from operator import length_hint
@@ -303,6 +304,117 @@ def pred_to_results_filter(pred: Callable[[T], bool]) -> Callable[[Iterator[T]],
     return rf
 #nur für ein prädikat
 
+def _contains_var(x):
+    if isvar(x):
+        return True
+    if isinstance(x, Mapping):
+        return any(_contains_var(k) or _contains_var(v) for k, v in x.items())
+    if isinstance(x, (list, tuple, set, frozenset)):
+        return any(_contains_var(e) for e in x)
+    return False
+
+def _positions_ground(val, positions=None):
+    """Prüft, ob bestimmte Tupel-Positionen ground sind. None => gesamter Wert."""
+    if positions is None:
+        return not _contains_var(val)
+    if not isinstance(val, (list, tuple)):
+        # einzelne Variable/Feld
+        return not _contains_var(val)
+    for i in positions:
+        if i < 0 or i >= len(val) or _contains_var(val[i]):
+            return False
+    return True
+
+def _foreign_goal(py_fn, term, *, mode_positions=None, policy="permissive"):
+    """
+    py_fn:  Python-Prädikat (True/False), erhält reifizierten 'term'.
+    mode_positions: z.B. None (alles), oder (0,), (0,1) -> diese Positionen müssen ground sein.
+    policy: "permissive" | "strict"
+      - permissive: wenn nicht genug ground -> State durchlassen (nicht prunen)
+      - strict:     wenn nicht genug ground -> scheitern (Guard)
+    """
+    def goal(S):
+        val = reify(term, S)
+
+        # Noch nicht genug Informationen?
+        if not _positions_ground(val, mode_positions):
+            if policy == "strict":
+                return  # scheitern = kein yield
+            else:       # permissive
+                yield S
+                return
+
+        # Genug gebunden -> prüfen
+        try:
+            if py_fn(val):
+                yield S
+        except Exception:
+            # Sicherheitsnetz: Exceptions bedeuten "False"
+            return
+    return goal
+
+def run_foreign2(n, x, *goals, foreign_preds=(), results_filter=None,
+                mode_positions=None, policy="permissive"):
+    
+    """
+    Hebt eine normale Python-Bool-Funktion 'py_fn' zu einem *Goal* an.
+
+    Ablauf pro State S:
+    1) Reifiziere den interessierenden Term: val = reify(term, S)
+    2) Prüfe Groundness gemäß 'mode_positions':
+       - Nicht genug gebunden?
+         * "permissive": State *durchlassen* (yield S), erst später prüfen
+         * "strict":     State *verwerfen* (kein yield) → Guard/Pruning
+    3) Genug gebunden → py_fn(val) ausführen:
+         True  → State behalten (yield S)
+         False/Exception → State verwerfen
+
+    Parameter
+    ---------
+    py_fn : Callable[[Any], bool]
+        Reines Python-Prädikat, das auf dem *reifizierten* Term arbeitet.
+        Muss True/False liefern (Exceptions werden wie False behandelt).
+
+    term : Any
+        Der logische Term, auf den py_fn angewendet werden soll (z. B. x, (a,b), ...).
+
+    mode_positions : None | Sequence[int]
+        **Semantik der Groundness-Anforderung:**
+        - None  → das *gesamte* 'term' muss ground sein, bevor py_fn geprüft wird.
+        - (i,…) → nur die angegebenen *Tupel-Positionen* von 'term' müssen ground sein.
+                  Andere Positionen dürfen noch Variablen enthalten. Das erlaubt,
+                  Prädikate früh einzusetzen, ohne unnötig zu blockieren.
+        Typische Wahl:
+          * einstelliges Prädikat: None
+          * binär/ternär: (0,1) bzw. (0,1,2) o. ä.
+
+    policy : {"permissive", "strict"}
+        **Evaluations-Policy bei *nicht* erfüllter Groundness:**
+        - "permissive" (Standard): State *durchlassen* (kein Pruning jetzt),
+          weil zu früh zu prüfen falsche Negativen erzeugen könnte.
+          → *Vollständigkeit bleibt garantiert*.
+        - "strict": State *sofort verwerfen* (Guard). Das kann schneller sein,
+          ist aber potentiell *inkomplett*, wenn die Reihenfolge/Heuristik
+          nicht sicherstellt, dass die benötigten Variablen vorher gebunden werden.
+    """
+
+    fgoals = tuple(_foreign_goal(p, x, mode_positions=mode_positions, policy=policy)
+                   for p in (foreign_preds or ()))
+    g = lall(*goals, *fgoals)
+
+    results = map(partial(reify, x), g({}))
+
+    if results_filter is not None:
+        results = results_filter(results)
+
+    if n is None:
+        return results
+    elif n == 0:
+        return tuple(results)
+    else:
+        # 'take' kannst du durch itertools.islice ersetzen, falls du keinen Helper hast
+        from itertools import islice
+        return tuple(islice(results, n))
 
 ######################################################################
 def dbgo(*args: Any, msg: Optional[Any] = None) -> GoalType:  # pragma: no cover

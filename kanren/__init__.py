@@ -5,7 +5,7 @@ from importlib.metadata import version
 from unification import Var, isvar, reify, unifiable, unify, var, variables, vars
 
 from .core import conde, eq, lall, lany, run
-from .core import run_foreign, pred_to_results_filter
+from .core import run_foreign, pred_to_results_filter, run_foreign2
 from .facts import Relation, fact, facts
 from .goals import (
     appendo,
