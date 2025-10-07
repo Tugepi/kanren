@@ -500,3 +500,63 @@ def isinstanceo(u, u_type):
             yield S
 
     return isinstanceo_goal
+
+# MINIMAL: FunctionConstraintStore + foreigno 
+
+from typing import Callable, Tuple
+
+class FunctionConstraintStore(PredicateStore):
+    op_str = "foreigno"
+    require_all_constraints = True  # alle Constraints für den Term müssen wahr sein
+
+    def cparam_type_check(self, p):
+        # Callable oder ein (callable, extra_args_tuple)
+        if callable(p):
+            return True
+        if isinstance(p, tuple) and len(p) == 2 and callable(p[0]) and isinstance(p[1], tuple):
+            return True
+        return False
+
+    def constraint_isground(self, lv, lvar_map):
+        # lv = Tupel der Argumente
+        # prüfen: alle Elemente im Tupel sind ground
+        if isinstance(lv, tuple):
+            return all(isground(a, lvar_map) for a in lv)
+        return isground(lv, lvar_map)
+
+    def constraint_check(self, lv, pr):
+        # lv ist das reifizierte Tupel der Argumente
+        if callable(pr):
+            func, extra = pr, ()
+        else:
+            func, extra = pr  # (callable, extra_args_tuple)
+        vals = lv if isinstance(lv, tuple) else (lv,)
+        return bool(func(*vals, *extra))
+
+def foreigno(func: Callable, *terms, extra_args: Tuple=()):
+    """Delayed-Constraint-Variante: trägt (terms) -> func als Constraint ein,
+       prüft automatisch erst, wenn alle terms ground sind."""
+    def goal(S):
+        u_terms = reify(terms, S)
+
+        # Falls S noch kein ConstrainedState ist: upgraden
+        if not isinstance(S, ConstrainedState):
+            S = ConstrainedState(S)
+
+        cs = S.constraints.setdefault(FunctionConstraintStore, FunctionConstraintStore())
+        constraint = (func, tuple(extra_args)) if extra_args else func
+
+        try:
+            # TERME-Tupel als Key (mehrstellig!)
+            cs.add(u_terms, constraint)
+        except TypeError:
+            # Falls unhashbar: frische Logikvar als Stellvertreter
+            u_lv = var()
+            S[u_lv] = u_terms
+            cs.add(u_lv, constraint)
+
+        # Direkter Check, falls evtl. schon ground – sonst bleibt’s als Delay im Store
+        if cs.post_unify_check(S.data, u_terms, constraint):
+            yield S
+    return goal
+

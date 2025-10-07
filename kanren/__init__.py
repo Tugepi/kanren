@@ -21,5 +21,19 @@ from .goals import (
 )
 from .term import arguments, operator, term, unifiable_with_term
 
+#for the ffi
+from .constraints import (
+    ConstrainedState,
+    ConstraintStore,
+    PredicateStore,
+    DisequalityStore,
+    TypeStore,
+    IsinstanceStore,
+    neq,
+    typeo,
+    isinstanceo,
+    foreigno,
+    FunctionConstraintStore,
+)
 
 __version__ = version("miniKanren")
