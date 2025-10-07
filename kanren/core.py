@@ -285,7 +285,7 @@ def run_foreign(
         return tuple(results)
     else:
         return tuple(take(n, results))
-
+#jetzige Code ist ein Nachfilter. Er ist semantisch schwächer als ein echtes Goal/Constraint, weil er die Suche nicht lenken kann und Mehrstelligkeit fehlt
 ######################################################################
 def apply_foreign(results: Iterator[Any], preds: Iterable[Callable[[Any], bool]]) -> Iterator[Any]:
     preds = tuple(preds or ())
