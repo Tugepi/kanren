@@ -77,6 +77,14 @@ class ConstraintStore(ABC):
 
     def __repr__(self):
         return f"ConstraintStore({self.op_str}: {self.lvar_constraints})"
+    
+
+    #########TEST, dmait alle constraints erfüllt sind
+    def is_clean(self, lvar_map):
+        ok = self.post_unify_check(lvar_map)
+        if ok is False:
+            return False
+        return len(self.lvar_constraints) == 0
 
 
 class ConstrainedState(UserDict):
@@ -518,24 +526,34 @@ class FunctionConstraintStore(PredicateStore):
         return False
 
     def constraint_isground(self, lv, lvar_map):
-        # lv = Tupel der Argumente
-        # prüfen: alle Elemente im Tupel sind ground
-        if isinstance(lv, tuple):
-            return all(isground(a, lvar_map) for a in lv)
+        # Wenn das Constraint auf einem Tupel liegt (z.B. (a, b, houses)),
+        # dann genügt es, wenn die HÄUSER (letztes Argument) ground sind.
+        if isinstance(lv, tuple) and len(lv) > 0:
+            last = reify(lv[-1], lvar_map)
+            return isground(last, lvar_map)
         return isground(lv, lvar_map)
-
+    
     def constraint_check(self, lv, pr):
-        # lv ist das reifizierte Tupel der Argumente
+        # pr kann callable ODER (callable, extra_args_tuple) sein
         if callable(pr):
             func, extra = pr, ()
         else:
-            func, extra = pr  # (callable, extra_args_tuple)
+            func, extra = pr
         vals = lv if isinstance(lv, tuple) else (lv,)
-        return bool(func(*vals, *extra))
+        try:
+            res = func(*vals, *extra)
+        except TypeError:
+            raise
+        except Exception:
+            return False
+        
+        # None weiterreichen (Delay), nur True/False boole'nen
+        if res is None:
+            return None
+        return bool(res)
+    
 
 def foreigno(func: Callable, *terms, extra_args: Tuple=()):
-    """Delayed-Constraint-Variante: trägt (terms) -> func als Constraint ein,
-       prüft automatisch erst, wenn alle terms ground sind."""
     def goal(S):
         u_terms = reify(terms, S)
 
@@ -555,8 +573,22 @@ def foreigno(func: Callable, *terms, extra_args: Tuple=()):
             S[u_lv] = u_terms
             cs.add(u_lv, constraint)
 
-        # Direkter Check, falls evtl. schon ground – sonst bleibt’s als Delay im Store
-        if cs.post_unify_check(S.data, u_terms, constraint):
-            yield S
+        
+        res = cs.post_unify_check(S.data, u_terms, constraint)
+        if res is False:
+            return  # Constraint verletzt → prune
+        # res ist True oder None: yield S (weiterführen oder delay)
+        yield S
     return goal
+
+##############TEST
+def all_function_constraints_resolved():
+        def goal(S):
+            if not isinstance(S, ConstrainedState):
+                yield S; return
+            cs = S.constraints.get(FunctionConstraintStore)
+            if cs is None or cs.is_clean(S.data):
+                yield S
+            # sonst: kein yield -> Lösung wird verworfen
+        return goal
 
