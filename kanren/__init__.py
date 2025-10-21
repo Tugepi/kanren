@@ -34,7 +34,6 @@ from .constraints import (
     isinstanceo,
     foreigno,
     FunctionConstraintStore,
-    all_function_constraints_resolved,
 )
 
 __version__ = version("miniKanren")

@@ -79,12 +79,6 @@ class ConstraintStore(ABC):
         return f"ConstraintStore({self.op_str}: {self.lvar_constraints})"
     
 
-    #########TEST, dmait alle constraints erfüllt sind
-    def is_clean(self, lvar_map):
-        ok = self.post_unify_check(lvar_map)
-        if ok is False:
-            return False
-        return len(self.lvar_constraints) == 0
 
 
 class ConstrainedState(UserDict):
@@ -509,7 +503,7 @@ def isinstanceo(u, u_type):
 
     return isinstanceo_goal
 
-# MINIMAL: FunctionConstraintStore + foreigno 
+
 
 from typing import Callable, Tuple
 
@@ -524,46 +518,71 @@ class FunctionConstraintStore(PredicateStore):
         if isinstance(p, tuple) and len(p) == 2 and callable(p[0]) and isinstance(p[1], tuple):
             return True
         return False
-
+    
     def constraint_isground(self, lv, lvar_map):
-        # Wenn das Constraint auf einem Tupel liegt (z.B. (a, b, houses)),
-        # dann genügt es, wenn die HÄUSER (letztes Argument) ground sind.
-        if isinstance(lv, tuple) and len(lv) > 0:
-            last = reify(lv[-1], lvar_map)
-            return isground(last, lvar_map)
         return isground(lv, lvar_map)
-    
-    def constraint_check(self, lv, pr):
-        # pr kann callable ODER (callable, extra_args_tuple) sein
-        if callable(pr):
-            func, extra = pr, ()
-        else:
-            func, extra = pr
-        vals = lv if isinstance(lv, tuple) else (lv,)
-        try:
-            res = func(*vals, *extra)
-        except TypeError:
-            raise
-        except Exception:
-            return False
-        
-        # None weiterreichen (Delay), nur True/False boole'nen
-        if res is None:
-            return None
-        return bool(res)
-    
 
+    def constraint_check(self, lv, pred):
+        if callable(pred):
+            func, extra = pred, ()
+        else:
+            func, extra = pred[0], pred[1]
+
+        args = tuple(lv) if isinstance(lv, (tuple, list)) else (lv,)
+
+        try:
+            out = func(*args, *extra)
+        except Exception:
+            return False  # strict: Fehler == Constraint verletzt
+
+        # strict Bool: nur True akzeptieren
+        return True if out is True else False
+    
+    def post_unify_check(self, lvar_map, lvar=None, value=None, old_state=None):
+        for lv_key, constraints in list(self.lvar_constraints.items()):
+            lv = reify(lv_key, lvar_map)
+
+            if not (self.constraint_isground(lv, lvar_map)):
+                # DEBUG
+                print("[STORE] skip (not ground):", type(lv), "constraints:", len(constraints))
+                continue
+
+            constraints_rf = reify(tuple(constraints), lvar_map)
+            results = []
+            undecided = False
+            for pr in constraints_rf:
+                r = self.constraint_check(lv, pr)
+                # DEBUG
+                # print("[STORE] check →", r)
+                if r is None:
+                    undecided = True
+                results.append(r)
+
+            if not undecided:
+                if self.require_all_constraints and any(r is False for r in results):
+                    # print("[STORE] → FAIL (False result)")
+                    return False
+                if (not self.require_all_constraints) and not any(r is True for r in results):
+                    # print("[STORE] → FAIL (no True among results)")
+                    return False
+                # alles entschieden & erfüllt → löschen
+                # print("[STORE] → satisfied, remove key")
+                del self.lvar_constraints[lv_key]
+            else:
+                # print("[STORE] undecided → keep constraint")
+                pass
+
+        return True
+    
 def foreigno(func: Callable, *terms, extra_args: Tuple=()):
     def goal(S):
         u_terms = reify(terms, S)
-
         # Falls S noch kein ConstrainedState ist: upgraden
         if not isinstance(S, ConstrainedState):
             S = ConstrainedState(S)
 
         cs = S.constraints.setdefault(FunctionConstraintStore, FunctionConstraintStore())
         constraint = (func, tuple(extra_args)) if extra_args else func
-
         try:
             # TERME-Tupel als Key (mehrstellig!)
             cs.add(u_terms, constraint)
@@ -581,14 +600,5 @@ def foreigno(func: Callable, *terms, extra_args: Tuple=()):
         yield S
     return goal
 
-##############TEST
-def all_function_constraints_resolved():
-        def goal(S):
-            if not isinstance(S, ConstrainedState):
-                yield S; return
-            cs = S.constraints.get(FunctionConstraintStore)
-            if cs is None or cs.is_clean(S.data):
-                yield S
-            # sonst: kein yield -> Lösung wird verworfen
-        return goal
+
 
