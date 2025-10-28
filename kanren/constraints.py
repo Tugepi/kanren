@@ -537,7 +537,7 @@ class FunctionConstraintStore(PredicateStore):
 
         # strict Bool: nur True akzeptieren
         return True if out is True else False
-    
+    '''
     def post_unify_check(self, lvar_map, lvar=None, value=None, old_state=None):
         for lv_key, constraints in list(self.lvar_constraints.items()):
             lv = reify(lv_key, lvar_map)
@@ -573,10 +573,20 @@ class FunctionConstraintStore(PredicateStore):
                 pass
 
         return True
-    
+    '''
 def foreigno(func: Callable, *terms, extra_args: Tuple=()):
     def goal(S):
         u_terms = reify(terms, S)
+
+        if all(isground(t, S) for t in u_terms):
+            try:
+                ok = func(*u_terms)
+            except Exception:
+                return
+            if ok is True:
+                yield S
+            return
+
         # Falls S noch kein ConstrainedState ist: upgraden
         if not isinstance(S, ConstrainedState):
             S = ConstrainedState(S)
@@ -600,5 +610,425 @@ def foreigno(func: Callable, *terms, extra_args: Tuple=()):
         yield S
     return goal
 
+########################## test
+from typing import Callable, Tuple, Iterable
 
+class BindingFunctionConstraintStore(PredicateStore):
+    op_str = "foreigno_bind"
+    require_all_constraints = True  # alle Constraints zu einem Key müssen „ok“ sein
 
+    def cparam_type_check(self, p):
+        # callable oder (callable, extra_args_tuple)
+        return callable(p) or (isinstance(p, tuple) and len(p) == 2 and callable(p[0]) and isinstance(p[1], tuple))
+    
+    def constraint_isground(self, lv, lvar_map):
+        # Für Tripel (a, b, houses): „bereit“, sobald die Häuserstruktur (5er-Sequenz) steht
+        if isinstance(lv, tuple) and len(lv) == 3:
+            _, _, hs = reify(lv, lvar_map)
+            try:
+                return len(hs) == 5  # Struktur vorhanden → wir dürfen prüfen/binden
+            except TypeError:
+                return False
+        # Fallback
+        return isground(lv, lvar_map)
+    
+    def constraint_check(self, lv, lvt):
+        kind, payload = self._run_pred(lv, lvt)
+        if kind == "ok":
+            return payload is True
+        return True
+
+    def _run_pred(self, lv, pred):
+        if callable(pred):
+            func, extra = pred, ()
+        else:
+            func, extra = pred[0], pred[1]
+
+        args = tuple(lv) if isinstance(lv, (tuple, list)) else (lv,)
+
+        try:
+            out = func(*args, *extra)
+        except Exception:
+            return ("ok", False)  # Fehler ⇒ Constraint verletzt
+
+        if out is True or out is False or out is None:
+            return ("ok", out)
+
+        # Bindungsprotokoll: ("bind", list_of_pairs)
+        if isinstance(out, tuple) and len(out) == 2 and out[0] == "bind" and isinstance(out[1], Iterable):
+            pairs = list(out[1])
+            return ("bind", pairs)
+
+        # unbekanntes Format ⇒ verletzen
+        return ("ok", False)
+
+    def post_unify_check(self, lvar_map, lvar=None, value=None, old_state=None):
+
+        ####test
+        if getattr(self, "_reentrant", False):
+            return True
+
+        for lv_key, constraints in list(self.lvar_constraints.items()):
+            lv = reify(lv_key, lvar_map)
+
+            if not self.constraint_isground(lv, lvar_map):
+                continue
+
+            constraints_rf = reify(tuple(constraints), lvar_map)
+            pending_binds = []
+            undecided = False
+
+            for pr in constraints_rf:
+                kind, payload = self._run_pred(lv, pr)
+
+                if kind == "ok":
+                    if payload is False:
+                        return False         # harter Verstoß
+                    if payload is None:
+                        undecided = True     # noch nicht entscheidbar
+                    # True → nichts weiter zu tun
+                elif kind == "bind":
+                    # deterministische Gleichungen sammeln
+                    pending_binds.extend(payload)
+
+            # Falls es Bindungen gibt: anwenden (deterministisch, ohne zu verzweigen)
+            if pending_binds:
+                # (1) Constraint zuerst deaktivieren, damit Re-Entrant-Aufrufe es nicht nochmal sehen
+                if lv_key in self.lvar_constraints:
+                    del self.lvar_constraints[lv_key]
+
+                try:
+                    # (2) Reentrancy-Guard setzen
+                    self._reentrant = True
+
+                    S2 = old_state
+                    for (u, v) in pending_binds:
+                        S2 = unify(u, v, S2)        # ruft intern wieder post_unify_check auf
+                        if S2 is False:
+                            return False
+
+                    # (3) Änderungen in-place zurückspielen
+                    old_state.data.clear()
+                    old_state.data.update(S2.data)
+                    old_state.constraints = S2.constraints
+
+                finally:
+                    self._reentrant = False
+
+                continue
+
+        return True
+
+def foreigno_bind(func: Callable, *terms, extra_args: Tuple = ()):
+    def goal(S):
+        u_terms = reify(terms, S)
+        if not isinstance(S, ConstrainedState):
+            S = ConstrainedState(S)
+
+        cs = S.constraints.setdefault(BindingFunctionConstraintStore, BindingFunctionConstraintStore())
+        constraint = (func, tuple(extra_args)) if extra_args else func
+        try:
+            cs.add(u_terms, constraint)
+        except TypeError:
+            u_lv = var()
+            S[u_lv] = u_terms
+            cs.add(u_lv, constraint)
+
+        ok = cs.post_unify_check(S.data, u_terms, constraint, old_state=S)
+        if ok is False:
+            return
+        yield S
+    return goal
+
+class UnaryFunctionStore(PredicateStore):
+    op_str = "foreignu"
+    require_all_constraints = True
+
+    def cparam_type_check(self, p):
+        return callable(p)
+
+    def constraint_isground(self, lv, lvar_map):
+        return isground(lv, lvar_map)
+
+    def constraint_check(self, lv, pred):
+        try:
+            out = pred(lv)  # lv ist atomar ODER ein Tupel
+        except Exception:
+            return False
+        return True if out is True else False
+
+from functools import partial
+from unification import var, reify
+
+def foreignu(pred_unary, term):
+    def goal(S):
+        u_term = reify(term, S)
+
+        # Fast-Path: sofort prüfen, wenn ground
+        if isground(u_term, S):
+            try:
+                if pred_unary(u_term) is True:
+                    yield S
+                # False/Exception => fail
+            except Exception:
+                return
+            return
+
+        # sonst defer: in Store eintragen und später prüfen
+        if not isinstance(S, ConstrainedState):
+            S = ConstrainedState(S)
+
+        cs = S.constraints.setdefault(UnaryFunctionStore, UnaryFunctionStore())
+        try:
+            cs.add(u_term, pred_unary)
+        except TypeError:
+            u_lv = var()
+            S[u_lv] = u_term
+            cs.add(u_lv, pred_unary)
+
+        if cs.post_unify_check(S.data, u_term, pred_unary, old_state=S):
+            yield S
+    return goal
+
+class UnaryBindingFunctionStore(PredicateStore):
+    """
+    Ein Store für unäre (ein-Argument) FFI-Prädikate, die neben True/False/None
+    auch Bindungen ausführen können, per Protokoll:
+       pred_unary(lv) -> ("bind", [(u,v), ...]) | True | False | None
+    """
+    op_str = "foreignu_bind"
+    require_all_constraints = True
+
+    # ----------- Typ-Check für Constraint-Parameter --------------------------
+    def cparam_type_check(self, p):
+        return callable(p)
+
+    # ----------- Groundness: "bereit für Check?" -----------------------------
+    def constraint_isground(self, lv, lvar_map):
+        # Optional: domänenspezifische Groundness (z.B. Zebra: (a,b,hs) mit len(hs)==5)
+        if isinstance(lv, tuple) and len(lv) == 3:
+            _, _, hs = reify(lv, lvar_map)
+            try:
+                return len(hs) == 5
+            except TypeError:
+                return False
+        # Default: voll ground
+        return isground(lv, lvar_map)
+
+    # ----------- Einzel-Check eines Constraints ------------------------------
+    def constraint_check(self, lv, pred_unary):
+        """
+        pred_unary(lv) -> ("bind", pairs) | True | False | None
+        Rückgabe:
+          - True  -> erfüllt
+          - False -> Verstoß
+          - None  -> (noch) unentscheidbar
+          - ("bind", pairs) -> Bindungen anwenden (deterministisch) und als erfüllt zählen
+        """
+        try:
+            out = pred_unary(lv)
+        except Exception:
+            return False  # Exceptions als Verstoß werten
+
+        # nur OK / DEFER, Bindungen werden in post_unify_check ausgeführt
+        if out is True or out is False or out is None:
+            return out
+        if isinstance(out, tuple) and len(out) == 2 and out[0] == "bind" and isinstance(out[1], Iterable):
+            # Speziell kennzeichnen: post_unify_check wird sie ausführen
+            return ("bind", list(out[1]))
+        return False  # unbekanntes Format => Verstoß
+
+    # ----------- Sweep + Bindungen anwenden ----------------------------------
+    def post_unify_check(self, lvar_map, lvar=None, value=None, old_state=None):
+        # Reentrancy-Guard (wichtig, weil unify erneut hierher führt)
+        if getattr(self, "_reentrant", False):
+            return True
+
+        for lv_key, constraints in list(self.lvar_constraints.items()):
+            lv = reify(lv_key, lvar_map)
+            if not self.constraint_isground(lv, lvar_map):
+                continue
+
+            constraints_rf = reify(tuple(constraints), lvar_map)
+            pending_binds = []
+            undecided = False
+
+            for pred_unary in constraints_rf:
+                res = self.constraint_check(lv, pred_unary)
+                if res is False:
+                    return False
+                if res is None:
+                    undecided = True
+                elif isinstance(res, tuple) and res[0] == "bind":
+                    pending_binds.extend(res[1])
+
+            # Bindungen deterministisch anwenden (wenn vorhanden)
+            if pending_binds:
+                if lv_key in self.lvar_constraints:
+                    del self.lvar_constraints[lv_key]
+                try:
+                    self._reentrant = True
+                    S2 = old_state
+                    for (u, v) in pending_binds:
+                        S2 = unify(u, v, S2)
+                        if S2 is False:
+                            return False
+                    # Änderungen zurück in den alten State schreiben
+                    old_state.data.clear()
+                    old_state.data.update(S2.data)
+                    old_state.constraints = S2.constraints
+                finally:
+                    self._reentrant = False
+                # nach Bindungen: weiter mit nächstem Key (die Bindungen könnten neue Checks triggern)
+                continue
+
+            # alle Constraints ok/none und keine Bindungen: nichts zu tun
+        return True
+    
+# Allgemeiner unärer, bindender Store (domain-agnostisch)
+class UnaryBindingFunctionStore(PredicateStore):
+    op_str = "foreignu_bind"
+    require_all_constraints = True
+
+    def cparam_type_check(self, p):
+        # Wir speichern direkt ein unäres Callable
+        return callable(p)
+
+    def constraint_isground(self, lv, lvar_map):
+        # Voll allgemein: prüfen erst, wenn lv (z. B. Tupel) ground ist
+        return isground(lv, lvar_map)
+
+    def constraint_check(self, lv, pred_unary):
+        """
+        pred_unary(lv) -> True | False | None | ("bind", [(u,v), ...])
+        - True  => erfüllt
+        - False => Verstoß
+        - None  => (noch) unentscheidbar, deferred
+        - ("bind", pairs) => Bindungen werden in post_unify_check angewendet
+        """
+        try:
+            out = pred_unary(lv)
+        except Exception:
+            return False
+
+        if out is True or out is False or out is None:
+            return out
+
+        if (isinstance(out, tuple) and len(out) == 2 and out[0] == "bind"
+                and isinstance(out[1], Iterable)):
+            # Signal an post_unify_check: es gibt Bindungen auszuführen
+            return ("bind", list(out[1]))
+
+        # Unbekanntes Format → Verstoß
+        return False
+
+    def post_unify_check(self, lvar_map, lvar=None, value=None, old_state=None):
+        if getattr(self, "_reentrant", False):
+            return True
+
+        for lv_key, constraints in list(self.lvar_constraints.items()):
+            lv = reify(lv_key, lvar_map)
+            if not self.constraint_isground(lv, lvar_map):
+                continue
+
+            constraints_rf = reify(tuple(constraints), lvar_map)
+            pending_binds = []
+            undecided = False
+
+            for pred_unary in constraints_rf:
+                res = self.constraint_check(lv, pred_unary)
+                if res is False:
+                    return False
+                if res is None:
+                    undecided = True
+                elif isinstance(res, tuple) and res[0] == "bind":
+                    pending_binds.extend(res[1])
+
+            if pending_binds:
+                # Key temporär entfernen, Reentrancy-Guard setzen
+                if lv_key in self.lvar_constraints:
+                    del self.lvar_constraints[lv_key]
+                try:
+                    self._reentrant = True
+                    S2 = old_state
+                    for (u, v) in pending_binds:
+                        S2 = unify(u, v, S2)
+                        if S2 is False:
+                            return False
+                    # Änderungen zurückspielen
+                    old_state.data.clear()
+                    old_state.data.update(S2.data)
+                    old_state.constraints = S2.constraints
+                finally:
+                    self._reentrant = False
+                continue  # nächster Key
+
+        return True
+
+def foreignu_bind(pred_unary, term):
+    """
+    pred_unary: Callable[[lv], True | False | None | ("bind", pairs)]
+    term:       lv (oft ein Tupel wie (a,b,context))
+    """
+    def goal(S):
+        u_term = reify(term, S)
+
+        # Fast-Path
+        if isground(u_term, S):
+            out = pred_unary(u_term)
+            if out is False or out is None:
+                return
+            if out is True:
+                yield S; return
+            if isinstance(out, tuple) and len(out) == 2 and out[0] == "bind":
+                S2 = S
+                for u, v in out[1]:
+                    S2 = unify(u, v, S2)
+                    if S2 is False:
+                        return
+                yield S2; return
+            return
+
+        # Deferred
+        if not isinstance(S, ConstrainedState):
+            S = ConstrainedState(S)
+
+        cs = S.constraints.setdefault(UnaryBindingFunctionStore, UnaryBindingFunctionStore())
+        try:
+            cs.add(u_term, pred_unary)
+        except TypeError:
+            u_lv = var(); S[u_lv] = u_term; cs.add(u_lv, pred_unary)
+
+        ok = cs.post_unify_check(S.data, u_term, pred_unary, old_state=S)
+        if ok is False:
+            return
+        yield S
+    return goal
+
+    
+def all_constraints_resolved():
+    def goal(S):
+        stores = []
+        cs = getattr(S, "constraints", {})
+        # ALLE relevanten Stores einsammeln:
+        from kanren.constraints import (
+            FunctionConstraintStore, BindingFunctionConstraintStore, UnaryFunctionStore
+        )
+        for K in (FunctionConstraintStore, BindingFunctionConstraintStore, UnaryFunctionStore):
+            st = cs.get(K)
+            if st is not None:
+                stores.append(st)
+
+        # einmal sweepen:
+        for st in stores:
+            if st.post_unify_check(S.data, old_state=S) is False:
+                return  # Widerspruch
+
+        from unification.core import isground
+        for st in stores:
+            for lv_key in list(st.lvar_constraints.keys()):
+                lv = reify(lv_key, S.data)
+                if st.constraint_isground(lv, S.data) or isground(lv, S.data):
+                    return      
+        yield S
+    return goal
