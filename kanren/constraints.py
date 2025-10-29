@@ -763,7 +763,7 @@ from unification import var, reify
 def foreignu(pred_unary, term):
     def goal(S):
         u_term = reify(term, S)
-
+        print("[foreignu] u_term:", u_term)
         # Fast-Path: sofort prüfen, wenn ground
         if isground(u_term, S):
             try:
@@ -789,6 +789,29 @@ def foreignu(pred_unary, term):
         if cs.post_unify_check(S.data, u_term, pred_unary, old_state=S):
             yield S
     return goal
+
+from kanren import conde, eq, lall, membero, run, lany
+
+def foreignn(fn, *terms):
+    """Wrappt fn(x1, ..., xN) zu pred_unary(lv_tuple) und ruft foreignu."""
+    packed = tuple(terms)
+
+    def pred_unary(lv):
+        if not isinstance(lv, tuple):
+            lv = (lv,)
+        return fn(*lv)
+
+    return foreignu(pred_unary, packed)
+
+def nexto_rel_from_bool(nexto_bool, a, b, hs, n=5):
+    """Hebt nexto_bool zu einer Relation an."""
+    cases = []
+    for i in range(n - 1):
+        cases.append(lall(eq(hs[i], a), eq(hs[i+1], b),
+                          foreignn(nexto_bool, a, b, hs)))
+        cases.append(lall(eq(hs[i], b), eq(hs[i+1], a),
+                          foreignn(nexto_bool, a, b, hs)))
+    return lany(*cases)
 
 class UnaryBindingFunctionStore(PredicateStore):
     """
